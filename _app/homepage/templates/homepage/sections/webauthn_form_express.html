@@ -1,0 +1,639 @@
+{% load static %}
+
+<div class="mt-5 hero-form" x-data="global">
+  <template x-if="webauthnSupported">
+    <section class="form-group">
+      <form @submit.prevent="handleSubmit()">
+        <div class="form-row">
+          <div class="col-sm-12 mb-3">
+            <input
+              type="text"
+              class="form-control form-control-lg"
+              id="input-email"
+              placeholder="example_username"
+              x-model="username"
+              autocomplete="username webauthn"
+              autofocus
+              @input.debounce="handleSaveUsername"
+            />
+          </div>
+          <template x-if="alert.show">
+            <div class="col-sm-12">
+              <div
+                :class="alert.alertClass"
+                x-text="alert.text"
+                aria-live="polite"
+              ></div>
+            </div>
+          </template>
+        </div>
+        <div class="form-row">
+          <div class="col-sm-6 mb-3">
+            <button
+              class="btn btn-block btn-primary"
+              type="submit"
+              id="register-button"
+              @click="handleClickRegister()"
+            >
+              Register
+            </button>
+          </div>
+          <div class="col-sm-6 mb-3">
+            <button
+              class="btn btn-block btn-primary"
+              id="login-button"
+              @click="handleClickAuthenticate()"
+            >
+              Authenticate
+            </button>
+          </div>
+        </div>
+      </form>
+    </section>
+  </template>
+
+  <template x-if="!webauthnSupported">
+    <h2>WebAuthn isn't supported. Please consider switching to a modern browser.</h2>
+  </template>
+</div>
+
+<script src="{% static "js/simplewebauthn-browser.12.0.0.umd.min.js" %}"></script>
+<script>
+  const {
+    browserSupportsWebAuthn,
+    startRegistration,
+    startAuthentication,
+    browserSupportsWebAuthnAutofill,
+  } = SimpleWebAuthnBrowser;
+
+  // Initialize advanced options
+  document.addEventListener('alpine:init', () => {
+    Alpine.data('global', () => ({
+      init() {
+        // Make sure WebAuthn is available in the browser
+        this.webauthnSupported = browserSupportsWebAuthn();
+        if (!this.webauthnSupported) {
+          return;
+        }
+
+        // Read options from query params if set
+        if (location.search) {
+          console.log('initializing options from query params');
+          this.showAdvancedSettings = true;
+
+          // Read query params
+          const currentParams = new URLSearchParams(location.search);
+
+          // Initialize data from query params
+
+          /**
+           * Registration Settings
+           */
+          this.options.algES256 = currentParams.get('algES256') === 'true';
+          this.options.algRS256 = currentParams.get('algRS256') === 'true';
+          this.options.algEd25519 = currentParams.get('algEd25519') === 'true';
+          this.options.algMLDSA44 = currentParams.get('algMLDSA44') === 'true';
+          this.options.algMLDSA65 = currentParams.get('algMLDSA65') === 'true';
+          this.options.algMLDSA87 = currentParams.get('algMLDSA87') === 'true';
+          // Grant users who manually add the ML-DSA query param some UI
+          this._canShowMLDSA = (
+            this.options.algMLDSA44
+            || this.options.algMLDSA65
+            || this.options.algMLDSA87
+          );
+
+          const _regUserVerification = currentParams.get('regUserVerification');
+          for (const uv of this.userVerificationOpts) {
+            if (uv.value === _regUserVerification) {
+              this.options.regUserVerification = _regUserVerification;
+              break;
+            }
+          }
+
+          const _attestation = currentParams.get('attestation');
+          for (const attestation of this.attestations) {
+            if (attestation.value === _attestation) {
+              this.options.attestation = _attestation;
+              break;
+            }
+          }
+
+          const _attachment = currentParams.get('attachment');
+          for (const attachment of this.attachments) {
+            if (attachment.value === _attachment) {
+              this.options.attachment = _attachment;
+              break;
+            }
+          }
+
+          const _discCred = currentParams.get('discoverableCredential');
+          for (const opt of this.discoverableCredentialOpts) {
+            if (opt.value === _discCred) {
+              this.options.discoverableCredential = _discCred;
+              break;
+            }
+          }
+
+          const _regHintsStr = currentParams.get('regHints');
+          if (_regHintsStr) {
+            _regHintsStr.split(',').forEach((hint) => {
+              if (hint === 'security-key') {
+                this._regHints.securityKey = true;
+                this._toggleRegHint('security-key', true);
+              } else if (hint === 'client-device') {
+                this._regHints.clientDevice = true;
+                this._toggleRegHint('client-device', true);
+              } else if (hint === 'hybrid') {
+                this._regHints.hybrid = true;
+                this._toggleRegHint('hybrid', true);
+              }
+            });
+            this._formatRegHintsForUI();
+          }
+
+          /**
+           * Authentication Settings
+           */
+          const _authUserVerification = currentParams.get('authUserVerification');
+          for (const uv of this.userVerificationOpts) {
+            if (uv.value === _authUserVerification) {
+              this.options.authUserVerification = _authUserVerification;
+              break;
+            }
+          }
+
+          const _authHintsStr = currentParams.get('authHints');
+          if (_authHintsStr) {
+            _authHintsStr.split(',').forEach((hint) => {
+              if (hint === 'security-key') {
+                this._authHints.securityKey = true;
+                this._toggleAuthHint('security-key', true);
+              } else if (hint === 'client-device') {
+                this._authHints.clientDevice = true;
+                this._toggleAuthHint('client-device', true);
+              } else if (hint === 'hybrid') {
+                this._authHints.hybrid = true;
+                this._toggleAuthHint('hybrid', true);
+              }
+            });
+            this._formatAuthHintsForUI();
+          }
+        }
+
+        // Update query parameters when options change
+        this.$watch('options', () => {
+          const newParams = new URLSearchParams(this.options);
+
+          // Still testing these query params, so require manual opt-in
+          if (!this._canShowMLDSA) {
+            newParams.delete("algMLDSA44");
+            newParams.delete("algMLDSA65");
+            newParams.delete("algMLDSA87");
+          }
+
+          window.history.replaceState(
+            {},
+            "",
+            `${location.pathname}?${newParams}`
+          );
+        });
+
+        /**
+         * Restore the remembered username, if one exists
+         */
+        const savedUsername = this._getUsername();
+        this.username = savedUsername;
+
+        /**
+         * Format the list of registration hints to help confirm the order of preference
+         */
+        this.$watch('options.regHints', () => {
+          this._formatRegHintsForUI();
+        });
+
+        /**
+         * Format the list of authentication hints to help confirm the order of preference
+         */
+        this.$watch('options.authHints', () => {
+          this._formatAuthHintsForUI();
+        });
+
+        /**
+         * Restart conditional UI when auth UV setting changes
+         */
+        this.$watch('options.authUserVerification', () => {
+          this._startConditionalUI();
+        });
+
+        this._startConditionalUI();
+      },
+
+      // Default state
+      webauthnSupported: true,
+      showAdvancedSettings: false,
+      formAction: 'registration',
+      _canShowMLDSA: false,
+      options: {
+        // Registration
+        regUserVerification: 'preferred',
+        attestation: 'none',
+        attachment: 'all',
+        algEd25519: true,
+        algES256: true,
+        algRS256: true,
+        algMLDSA44: false,
+        algMLDSA65: false,
+        algMLDSA87: false,
+        discoverableCredential: 'preferred',
+        regHints: [],
+        // Authentication
+        authUserVerification: 'preferred',
+        authHints: [],
+      },
+      username: '',
+      alert: {
+        show: false,
+        alertClass: 'alert alert-success',
+        text: '',
+      },
+      // We need to track some state to properly support hints preference order
+      _regHints: {
+        securityKey: false,
+        clientDevice: false,
+        hybrid: false,
+        formatted: "[]",
+      },
+      _authHints: {
+        securityKey: false,
+        clientDevice: false,
+        hybrid: false,
+        formatted: "[]",
+      },
+      // Possible values for options.regUserVerification and options.authUserVerification
+      userVerificationOpts: [
+        { label: 'Discouraged', value: 'discouraged' },
+        { label: 'Preferred', value: 'preferred' },
+        { label: 'Required', value: 'required' },
+      ],
+      // Possible values for options.attestation
+      attestations: [
+        { label: 'None', value: 'none' },
+        { label: 'Direct', value: 'direct' },
+      ],
+      // Possible values for options.attachment
+      attachments: [
+        { label: 'All Supported', value: 'all' },
+        { label: 'Cross-Platform', value: 'cross_platform' },
+        { label: 'Platform', value: 'platform' },
+      ],
+      discoverableCredentialOpts: [
+        { label: 'Discouraged', value: 'discouraged' },
+        { label: 'Preferred', value: 'preferred' },
+        { label: 'Required', value: 'required' },
+      ],
+
+      // Event handlers
+      toggleDrawer() {
+        this.showAdvancedSettings = !this.showAdvancedSettings;
+      },
+      hideAlert() {
+        this.alert.show = false;
+      },
+      showSuccessAlert(text) {
+        this.alert.alertClass = 'alert alert-success';
+        this.alert.text = text;
+        this.alert.show = true;
+      },
+      showErrorAlert(text) {
+        this.alert.alertClass = 'alert alert-danger';
+        this.alert.text = text;
+        this.alert.show = true;
+      },
+      handleClickRegister() {
+        this.formAction = 'register';
+      },
+      handleClickAuthenticate() {
+        this.formAction = 'authenticate';
+      },
+      async handleSubmit() {
+        this.hideAlert();
+
+        // Perform action
+        try {
+          if (this.formAction === 'register') {
+            await this._startRegistration();
+          } else {
+            await this._startAuthentication(false);
+          }
+        } catch (err) {
+          this.showErrorAlert(err.message);
+        }
+      },
+      resetSettings() {
+        // Clear saved username
+        this._resetUsername();
+        // Reload the page sans query params
+        window.location.href = '{% url "index" %}';
+      },
+      handleSelectRegHintsSecurityKey() {
+        this._toggleRegHint('security-key', this._regHints.securityKey);
+      },
+      handleSelectRegHintsClientDevice() {
+        this._toggleRegHint('client-device', this._regHints.clientDevice);
+      },
+      handleSelectRegHintsHybrid() {
+        this._toggleRegHint('hybrid', this._regHints.hybrid);
+      },
+      handleSelectAuthHintsSecurityKey() {
+        this._toggleAuthHint('security-key', this._authHints.securityKey);
+      },
+      handleSelectAuthHintsClientDevice() {
+        this._toggleAuthHint('client-device', this._authHints.clientDevice);
+      },
+      handleSelectAuthHintsHybrid() {
+        this._toggleAuthHint('hybrid', this._authHints.hybrid);
+      },
+      /**
+       * @param {InputEvent} event
+       */
+      handleSaveUsername(event) {
+        const newUsername = event.target.value;
+        this._saveUsername(newUsername);
+      },
+      // Tips & Tricks Modal
+      openTipsTricks() {
+        document.getElementById('advanced-settings-tips-tricks').showModal();
+      },
+      closeTipsTricks() {
+        document.getElementById('advanced-settings-tips-tricks').close();
+      },
+      // Internal Methods
+      async _startRegistration() {
+        this._syncUsernameInputState();
+
+        // Submit options
+        const {
+          regUserVerification,
+          algEd25519,
+          algES256,
+          algRS256,
+          algMLDSA44,
+          algMLDSA65,
+          algMLDSA87,
+          attestation,
+          attachment,
+          discoverableCredential,
+          regHints,
+        } = this.options;
+
+        const algorithms = [];
+
+        if (algMLDSA44) {
+          algorithms.push('mldsa44');
+        }
+
+        if (algMLDSA65) {
+          algorithms.push('mldsa65');
+        }
+
+        if (algMLDSA87) {
+          algorithms.push('mldsa87');
+        }
+
+        if (algEd25519) {
+          algorithms.push('ed25519');
+        }
+
+        if (algES256) {
+          algorithms.push('es256');
+        }
+
+        if (algRS256) {
+          algorithms.push('rs256');
+        }
+
+        if (!this.username) {
+          this.showErrorAlert('Please enter a username to register');
+          return;
+        }
+
+        const apiRegOptsResp = await fetch('{% url "registration-options" %}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: this.username,
+            // e.g. 'preferred'
+            user_verification: regUserVerification,
+            // e.g. 'direct'
+            attestation,
+            // e.g. 'platform'
+            attachment,
+            // e.g. ['es256', 'rs256']
+            algorithms,
+            // e.g. 'preferred'
+            discoverable_credential: discoverableCredential,
+            // e.g. ['security-key', 'hybrid']
+            hints: regHints,
+          }),
+        });
+        const registrationOptionsJSON = await apiRegOptsResp.json();
+
+        console.log('REGISTRATION OPTIONS');
+        console.log(JSON.stringify(registrationOptionsJSON, null, 2));
+
+        // Start WebAuthn registration
+        const regResp = await startRegistration({ optionsJSON: registrationOptionsJSON });
+
+        console.log('REGISTRATION RESPONSE');
+        console.log(JSON.stringify(regResp, null, 2));
+
+        // Submit response
+        const apiRegVerResp = await fetch('{% url "registration-verification" %}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: this.username,
+            response: regResp,
+          }),
+        });
+        const verificationJSON = await apiRegVerResp.json()
+
+        // Display outcome
+        if (verificationJSON.verified === true) {
+          this.showSuccessAlert('Success! Now try to authenticate...');
+        } else {
+          this.showErrorAlert(`Registration failed: ${verificationJSON.error}`);
+        }
+      },
+      async _startAuthentication(startConditionalUI = false) {
+        this._syncUsernameInputState();
+
+        const {
+          authUserVerification,
+          authHints,
+        } = this.options;
+
+        let username = this.username;
+        if (startConditionalUI) {
+          // We won't have a username for conditional UI
+          username = undefined;
+        }
+
+        // Submit options
+        const apiAuthOptsResp = await fetch('{% url "authentication-options" %}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username,
+            user_verification: authUserVerification,
+            hints: authHints,
+          }),
+        });
+        const authenticationOptionsJSON = await apiAuthOptsResp.json();
+
+        console.log('AUTHENTICATION OPTIONS');
+        console.log(JSON.stringify(authenticationOptionsJSON, null, 2));
+
+        if (authenticationOptionsJSON.error) {
+          this.showErrorAlert(authenticationOptionsJSON.error);
+          return;
+        }
+
+        // Start WebAuthn authentication
+        const authResp = await startAuthentication({
+          optionsJSON: authenticationOptionsJSON,
+          useBrowserAutofill: startConditionalUI,
+        });
+
+        console.log('AUTHENTICATION RESPONSE');
+        console.log(JSON.stringify(authResp, null, 2));
+
+        // Submit response
+        const apiAuthVerResp = await fetch('{% url "authentication-verification" %}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: this.username,
+            response: authResp,
+          }),
+        });
+        const verificationJSON = await apiAuthVerResp.json()
+
+        if (verificationJSON.verified === true) {
+          // Reload page to display profile
+          window.location.href = '{% url "profile" %}';
+        } else {
+          this.showErrorAlert(`Authentication failed: ${verificationJSON.error}`);
+        }
+      },
+      async _startConditionalUI() {
+        // Set up Conditional UI if supported
+        browserSupportsWebAuthnAutofill().then(async (supported) => {
+          if (supported) {
+            console.log('Setting up Conditional UI');
+            try {
+              await this._startAuthentication(true);
+            } catch (err) {
+              if (err.name === 'AbortError') {
+                console.log('Conditional UI request was aborted');
+              } else {
+                console.error('Conditional UI error:', err);
+              }
+            }
+          }
+        });
+      },
+      /**
+       * Registration hints can be ordered by preference, but there's no good native HTML element
+       * that allows for selection _and_ sorting.
+       *
+       * We'll handle it here by making each hint a checkbox, and the order in which a checkbox is
+       * checked will simply append that hint to the end of the list of selected hints.
+       *
+       * Unchecking a hint will remove it from its arbitrary place in the list of choices.
+       */
+      _toggleRegHint(hintName, isChecked) {
+        if (isChecked) {
+          this.options.regHints.push(hintName);
+        } else {
+          const securityKeyIndex = this.options.regHints.indexOf(hintName);
+          if (securityKeyIndex >= 0) {
+            this.options.regHints.splice(securityKeyIndex, 1);
+          }
+        }
+      },
+      /**
+       * Format registration hints so we can visualize their preference order
+       */
+      _formatRegHintsForUI() {
+        let formattedHints = JSON.stringify(this.options.regHints);
+        // Add a space between items
+        formattedHints = formattedHints.replace(/,/g, ", ");
+
+        this._regHints.formatted = formattedHints;
+      },
+      /**
+       * Authentication hints can be ordered by preference, but there's no good native HTML element
+       * that allows for selection _and_ sorting.
+       *
+       * We'll handle it here by making each hint a checkbox, and the order in which a checkbox is
+       * checked will simply append that hint to the end of the list of selected hints.
+       *
+       * Unchecking a hint will remove it from its arbitrary place in the list of choices.
+       */
+       _toggleAuthHint(hintName, isChecked) {
+        if (isChecked) {
+          this.options.authHints.push(hintName);
+        } else {
+          const hintIndex = this.options.authHints.indexOf(hintName);
+          if (hintIndex >= 0) {
+            this.options.authHints.splice(hintIndex, 1);
+          }
+        }
+      },
+      /**
+       * Format registration hints so we can visualize their preference order
+       */
+       _formatAuthHintsForUI() {
+        let formattedHints = JSON.stringify(this.options.authHints);
+        // Add a space between items
+        formattedHints = formattedHints.replace(/,/g, ", ");
+
+        this._authHints.formatted = formattedHints;
+      },
+      /**
+       * If the user hits the browser back button from the profile page then the input can still
+       * be populated, but Alpine won't know this. This helps sync form state a bit.
+       */
+      _syncUsernameInputState() {
+        const elemUsername = document.getElementById('input-email');
+        if (elemUsername.value && !this.username) {
+          this.username = elemUsername.value;
+        }
+      },
+      /**
+       * Retrieve the remembered username (if it exists)
+       * @returns {string}
+       */
+      _getUsername() {
+        return window.localStorage.getItem('savedUsername') ?? "";
+      },
+      /**
+       * Remember the username so the user doesn't have to keep entering it
+       * @param {string | null} newUsername
+       * @returns {void}
+       */
+      _saveUsername(newUsername) {
+        window.localStorage.setItem('savedUsername', newUsername);
+      },
+      /**
+       * Clear any remembered username
+       * @returns {void}
+       */
+      _resetUsername() {
+        window.localStorage.removeItem('savedUsername');
+      },
+    }));
+  });
+</script>
+<script defer src="{% static "js/alpinejs-3.10.2.min.js" %}"></script>

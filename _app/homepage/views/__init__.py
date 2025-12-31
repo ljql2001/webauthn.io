@@ -7,9 +7,11 @@ from .logout import logout
 from .credential_delete import credential_delete
 from .well_known import apple_app_site_association
 from .profile import profile
+from .myverify import myverify
 
 __all__ = [
     "index",
+    "myverify",
     "registration_options",
     "registration_verification",
     "authentication_options",

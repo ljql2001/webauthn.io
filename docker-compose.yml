@@ -9,12 +9,11 @@ services:
     image: caddy:2.6.1-alpine
     restart: always
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+      - "3000:80"
     volumes:
       - $PWD/_caddy/Caddyfile:/etc/caddy/Caddyfile
       - static_files_volume:/usr/share/caddy/static
+      - $PWD/_caddy/.well-known:/usr/share/caddy/.well-known
       - caddy_data:/data
       - caddy_config:/config
     networks:
@@ -38,7 +37,7 @@ services:
       - ./pyproject.toml:/usr/src/app/pyproject.toml
       - ./uv.lock:/usr/src/app/uv.lock
       # Django static files will go here so Caddy can access them
-      - static_files_volume:/usr/src/app/static
+      - static_files_volume:/app/static_files
     networks:
       - caddy_network
       - redis_network
@@ -54,6 +53,7 @@ services:
       - RP_EXPECTED_ORIGIN
       - AASA_APP_ID_PREFIX
       - AASA_BUNDLE_ID
+      - ALLOWED_HOSTS
 
 volumes:
   static_files_volume:

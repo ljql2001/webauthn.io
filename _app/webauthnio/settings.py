@@ -17,7 +17,7 @@ _secret_key_file.close()
 # Enable doing things differently if we're in debug mode
 DEBUG = os.getenv("DEBUG", False) == "true"
 
-ALLOWED_HOSTS = ["localhost"]
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "localhost").split(",") if h.strip()]
 CSRF_TRUSTED_ORIGINS = ["http://localhost"]
 
 # MUST NOT include protocol (e.g. "webauthn.io")
@@ -183,9 +183,13 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.0/howto/static-files/
 
-STATIC_URL = "static/"
+STATIC_URL = '/static/'
 
-STATIC_ROOT = "static"
+STATIC_ROOT = '/app/static_files'
+
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'static'),
+]
 
 STATICFILES_FINDERS = [
     "django.contrib.staticfiles.finders.FileSystemFinder",
